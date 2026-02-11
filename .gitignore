@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+.env
+.DS_Store
+*.docx
+*.pdf
+deploy_oracle.sh
+# We include chroma_data in the first push so it has some memory, 
+# although Render's free tier won't persist new messages added later.
+# If you want it completely clean, uncomment the line below:
+# chroma_data/

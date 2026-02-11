@@ -1,0 +1,24 @@
+# Slack Draft Agent - Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Slack SDK + Bolt framework
+slack-bolt==1.21.3
+slack-sdk==3.34.0
+
+# Anthropic Claude API
+anthropic==0.43.0
+
+# OpenAI (for text embeddings only)
+openai>=1.50.0
+
+# Vector database (runs locally, no external service needed)
+chromadb==0.5.23
+
+# Environment variable management
+python-dotenv==1.0.1
+
+# Async scheduling for background tasks
+apscheduler==3.10.4
+
+# Health check server for Cloud hosting (Render/Railway)
+flask==3.0.3
