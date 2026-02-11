@@ -336,11 +336,6 @@ def handle_message(event, say):
     - Indexes ALL messages for cross-channel context
     - Generates drafts only for DMs and @mentions
     """
-    # Ignore messages from yourself
-    user_id = event.get("user", "")
-    if user_id == config.MY_SLACK_USER_ID:
-        return
-
     # Ignore bot messages and message edits/deletions
     if event.get("bot_id") or event.get("subtype"):
         return
