@@ -336,19 +336,34 @@ def handle_message(event, say):
     - Indexes ALL messages for cross-channel context
     - Generates drafts only for DMs and @mentions
     """
+    subtype = event.get("subtype", "")
+
+    # For edited messages, extract the actual message from the nested structure
+    # channel and channel_type live at the top level, not inside "message"
+    if subtype == "message_changed":
+        channel_id = event.get("channel", "")
+        channel_type = event.get("channel_type", "")
+        event = event.get("message", {})
+        if event.get("bot_id"):
+            return
+    elif subtype:
+        # Ignore deletions, joins, leaves, etc.
+        return
+    else:
+        channel_id = event.get("channel", "")
+        channel_type = event.get("channel_type", "")
+
     user_id = event.get("user", "")
 
-    # Ignore bot messages and message edits/deletions
-    if event.get("bot_id") or event.get("subtype"):
+    # Ignore bot messages
+    if event.get("bot_id"):
         return
 
     text = event.get("text", "").strip()
     if not text:
         return
 
-    channel_id = event.get("channel", "")
     thread_ts = event.get("thread_ts") or event.get("ts")
-    channel_type = event.get("channel_type", "")
 
     # Index EVERY message for cross-channel intelligence
     index_message(text, user_id, channel_id, event.get("ts", ""))
