@@ -390,15 +390,22 @@ def handle_message(event, say):
 
     # Get relevant past conversations from vector store
     # This now uses recency-weighted search across ALL channels
-    context_messages = rag.search(
-        query=get_user_name(user_id) + " " + clean_text,
-        top_k=config.RAG_TOP_K,
-    )
+    try:
+        context_messages = rag.search(
+            query=get_user_name(user_id) + " " + clean_text,
+            top_k=config.RAG_TOP_K,
+        )
+    except Exception as e:
+        logger.warning("RAG search failed, drafting without context: %s", e)
+        context_messages = []
 
     # Get thread context if this is a threaded conversation
     thread_messages = []
     if event.get("thread_ts"):
-        thread_messages = get_thread_messages(channel_id, event["thread_ts"])
+        try:
+            thread_messages = get_thread_messages(channel_id, event["thread_ts"])
+        except Exception as e:
+            logger.warning("Failed to fetch thread context: %s", e)
 
     # Generate draft using Claude
     draft = drafter.generate_draft(
