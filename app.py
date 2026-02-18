@@ -132,6 +132,23 @@ def delete_dm_message(dm_channel, dm_ts):
         logger.warning("Could not delete DM message: %s", e)
 
 
+def update_dm_message(dm_channel, dm_ts, text=None, blocks=None):
+    """Update a DM message by its channel and timestamp."""
+    if not dm_channel or not dm_ts:
+        return
+    try:
+        kwargs = {"channel": dm_channel, "ts": dm_ts}
+        if blocks:
+            kwargs["blocks"] = blocks
+            kwargs["text"] = text or ""
+        else:
+            kwargs["text"] = text or ""
+        slack.chat_update(**kwargs)
+        logger.info("Updated DM draft message.")
+    except SlackApiError as e:
+        logger.warning("Could not update DM message: %s", e)
+
+
 # ── Draft Delivery (Dual: Ephemeral + DM) ───────────────────────
 def send_draft_both(channel_id, thread_ts, draft, original_text, sender_name, channel_name):
     """
@@ -430,6 +447,7 @@ def handle_send(ack, action, respond):
     """Send the draft as an actual message, then clean up both copies."""
     ack()
     data = json.loads(action["value"])
+    logger.info("Send button clicked (channel=%s)", data.get("channel"))
 
     try:
         slack.chat_postMessage(
@@ -437,14 +455,25 @@ def handle_send(ack, action, respond):
             thread_ts=data["thread_ts"],
             text=data["draft"],
         )
-        # Clean up: replace the message the button was on
-        respond(text="✅ Reply sent!", replace_original=True)
-        # Clean up: delete the DM copy
-        delete_dm_message(data.get("dm_channel"), data.get("dm_ts"))
         logger.info("Draft sent as actual message.")
     except SlackApiError as e:
-        respond(text="❌ Failed to send: " + str(e))
         logger.error("Failed to send draft: %s", e)
+        try:
+            respond(text="❌ Failed to send: " + str(e), replace_original=True)
+        except Exception:
+            pass
+        return
+
+    # Update the clicked message (response_url may be expired after 30 min)
+    try:
+        respond(text="✅ Reply sent!", replace_original=True)
+    except Exception as e:
+        logger.warning("respond() failed (likely expired response_url): %s", e)
+        # Fallback: update the DM copy directly via API
+        update_dm_message(data.get("dm_channel"), data.get("dm_ts"), text="✅ Reply sent!")
+
+    # Clean up DM copy
+    delete_dm_message(data.get("dm_channel"), data.get("dm_ts"))
 
 
 @app.action("regenerate_draft")
@@ -452,12 +481,18 @@ def handle_regenerate(ack, action, respond):
     """Generate a new draft for the same message."""
     ack()
     data = json.loads(action["value"])
+    logger.info("Regenerate button clicked (channel=%s)", data.get("channel"))
 
     sender_name = data.get("sender_name", "(unknown)")
     channel_name = data.get("channel_name") or get_channel_name(data["channel"])
 
     # Re-search and re-generate
-    context_messages = rag.search(query=data["original_text"])
+    try:
+        context_messages = rag.search(query=data["original_text"])
+    except Exception as e:
+        logger.warning("RAG search failed during regenerate: %s", e)
+        context_messages = []
+
     thread_messages = get_thread_messages(data["channel"], data["thread_ts"])
 
     draft = drafter.generate_draft(
@@ -531,9 +566,23 @@ def handle_regenerate(ack, action, respond):
                 ],
             },
         ]
-        respond(blocks=blocks, replace_original=True)
+
+        # Update the clicked message (response_url may be expired)
+        try:
+            respond(blocks=blocks, replace_original=True)
+        except Exception as e:
+            logger.warning("respond() failed during regenerate: %s", e)
+            # Fallback: update the DM copy directly
+            update_dm_message(
+                dm_channel, dm_ts,
+                text="New draft for " + sender_name + ": " + draft,
+                blocks=blocks,
+            )
     else:
-        respond(text="Couldn't generate a new draft. Try again?")
+        try:
+            respond(text="Couldn't generate a new draft. Try again?")
+        except Exception as e:
+            logger.warning("respond() failed: %s", e)
 
 
 @app.action("dismiss_draft")
@@ -541,9 +590,15 @@ def handle_dismiss(ack, action, respond):
     """Dismiss the draft and clean up the DM copy."""
     ack()
     data = json.loads(action.get("value", "{}"))
-    # Clean up: replace the message the button was on
-    respond(delete_original=True)
-    # Clean up: delete the DM copy
+    logger.info("Dismiss button clicked")
+
+    # Delete the clicked message (response_url may be expired)
+    try:
+        respond(delete_original=True)
+    except Exception as e:
+        logger.warning("respond() failed during dismiss: %s", e)
+
+    # Always clean up the DM copy directly via API
     delete_dm_message(data.get("dm_channel"), data.get("dm_ts"))
 
 
