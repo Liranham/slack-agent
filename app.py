@@ -32,15 +32,21 @@ from threading import Thread
 import os
 
 # ── Setup ────────────────────────────────────────────────────────
-config.validate()
+# Note: config.validate() is now called after health server starts
 logging.basicConfig(
-    level=getattr(logging, config.LOG_LEVEL),
+    level=getattr(logging, config.LOG_LEVEL, logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-app = App(token=config.SLACK_BOT_TOKEN, signing_secret=config.SLACK_SIGNING_SECRET)
-slack = WebClient(token=config.SLACK_BOT_TOKEN)
+# These will be initialized after validation
+try:
+    app = App(token=config.SLACK_BOT_TOKEN, signing_secret=config.SLACK_SIGNING_SECRET)
+    slack = WebClient(token=config.SLACK_BOT_TOKEN)
+except Exception:
+    # If tokens are missing, functions below will fail, but health server will work
+    app = None
+    slack = None
 
 # ── User Cache ───────────────────────────────────────────────────
 _user_cache = {}
@@ -626,53 +632,68 @@ def handle_stats(ack, respond):
 
 # ── Start the App ────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("\n" + "=" * 60)
-    print("  Slack Draft Agent - Starting...")
-    print("  Real-time indexing | 60-day rolling window | Dual delivery")
-    print("=" * 60)
-
-    stats = rag.get_stats()
-    if stats["total_messages"] == 0:
-        print(
-            "\n⚠️  Vector store is empty!"
-            "\n   Run 'python ingest.py' first to load your Slack history."
-            "\n   The agent will still work, but drafts won't have context.\n"
-        )
-    else:
-        print("\n✅ " + str(stats["total_messages"]) + " messages in vector store.")
-        if stats.get("oldest_message"):
-            print("   Date range: " + stats["oldest_message"] + " to " + stats.get("newest_message", "now"))
-
-    print("👤 Watching messages for user: " + config.MY_SLACK_USER_ID)
-    print("🤖 Using model: " + config.CLAUDE_MODEL)
-    print("📦 Retention: " + str(config.RETENTION_DAYS) + " days | Recency weight: " + str(config.RECENCY_WEIGHT))
-
-    # Start background scheduler for daily cleanup
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(daily_cleanup, "interval", hours=24)
-    scheduler.start()
-    print("🧹 Daily cleanup scheduled (every 24 hours)")
-
-    # Run one cleanup on startup
-    daily_cleanup()
-
-    print("📡 Connecting to Slack via Socket Mode...\n")
-
-    # ── Health Check Server (for Render.com) ──────────────────
+    # Start health server FIRST (before config validation at module level)
     flask_app = Flask(__name__)
 
     @flask_app.route('/')
     def health_check():
-        return "Slack Draft Agent is running!", 200
+        return "Slack Draft Agent health check", 200
 
     def run_flask():
-        # Render provides a PORT environment variable
         port = int(os.environ.get("PORT", 8080))
-        flask_app.run(host='0.0.0.0', port=port)
+        flask_app.run(host='0.0.0.0', port=port, use_reloader=False)
 
-    # Start Flask in a background thread
     Thread(target=run_flask, daemon=True).start()
-    print(f"🚀 Health check server started (port {os.environ.get('PORT', 8080)})")
+    print(f"🚀 Health server started on port {os.environ.get('PORT', 8080)}\n")
 
-    handler = SocketModeHandler(app, config.SLACK_APP_TOKEN)
-    handler.start()
+    try:
+        # Validate config now (after health server is running)
+        config.validate()
+
+        print("=" * 60)
+        print("  Slack Draft Agent - Starting...")
+        print("  Real-time indexing | 60-day rolling window | Dual delivery")
+        print("=" * 60)
+
+        stats = rag.get_stats()
+        if stats["total_messages"] == 0:
+            print(
+                "\n⚠️  Vector store is empty!"
+                "\n   Run 'python ingest.py' first to load your Slack history."
+                "\n   The agent will still work, but drafts won't have context.\n"
+            )
+        else:
+            print("\n✅ " + str(stats["total_messages"]) + " messages in vector store.")
+            if stats.get("oldest_message"):
+                print("   Date range: " + stats["oldest_message"] + " to " + stats.get("newest_message", "now"))
+
+        print("👤 Watching messages for user: " + config.MY_SLACK_USER_ID)
+        print("🤖 Using model: " + config.CLAUDE_MODEL)
+        print("📦 Retention: " + str(config.RETENTION_DAYS) + " days | Recency weight: " + str(config.RECENCY_WEIGHT))
+
+        # Start background scheduler for daily cleanup
+        scheduler = BackgroundScheduler()
+        scheduler.add_job(daily_cleanup, "interval", hours=24)
+        scheduler.start()
+        print("🧹 Daily cleanup scheduled (every 24 hours)")
+
+        # Run one cleanup on startup
+        daily_cleanup()
+
+        print("📡 Connecting to Slack via Socket Mode...\n")
+
+        handler = SocketModeHandler(app, config.SLACK_APP_TOKEN)
+        handler.start()
+
+    except Exception as e:
+        print(f"\n🚨 FATAL ERROR: Slack Draft Agent failed to start")
+        print(f"Error: {e}\n")
+        print("Check your environment variables:")
+        print("  Required: SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_SIGNING_SECRET,")
+        print("            MY_SLACK_USER_ID, ANTHROPIC_API_KEY, OPENAI_API_KEY\n")
+        logger.error(f"Failed to start: {e}", exc_info=True)
+
+        # Keep health server alive
+        import threading
+        print("Health server will keep running for debugging...\n")
+        threading.Event().wait()
