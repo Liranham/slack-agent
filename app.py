@@ -43,10 +43,12 @@ logger = logging.getLogger(__name__)
 try:
     app = App(token=config.SLACK_BOT_TOKEN, signing_secret=config.SLACK_SIGNING_SECRET)
     slack = WebClient(token=config.SLACK_BOT_TOKEN)
+    slack_user = WebClient(token=config.SLACK_USER_TOKEN or config.SLACK_BOT_TOKEN)
 except Exception:
     # If tokens are missing, functions below will fail, but health server will work
     app = None
     slack = None
+    slack_user = None
 
 # ── User Cache ───────────────────────────────────────────────────
 _user_cache = {}
@@ -456,12 +458,14 @@ def handle_send(ack, action, respond):
     logger.info("Send button clicked (channel=%s)", data.get("channel"))
 
     try:
-        slack.chat_postMessage(
+        slack_user.chat_postMessage(
             channel=data["channel"],
             thread_ts=data["thread_ts"],
             text=data["draft"],
+            username="Liran",
+            as_user=False,
         )
-        logger.info("Draft sent as actual message.")
+        logger.info("Draft sent as actual message (as Liran).")
     except SlackApiError as e:
         logger.error("Failed to send draft: %s", e)
         try:
