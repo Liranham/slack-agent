@@ -1,5 +1,5 @@
 """
-Draft Generator - uses Claude to write draft responses.
+Draft Generator - uses OpenAI to write draft responses.
 
 Takes an incoming Slack message + relevant context from the vector store
 and produces a natural-sounding draft reply.
@@ -10,7 +10,7 @@ the bot monitors, not just the current conversation.
 import logging
 from typing import Optional
 
-import anthropic
+import openai
 import config
 
 logger = logging.getLogger(__name__)
@@ -19,10 +19,10 @@ _client = None
 
 
 def _get_client():
-    """Lazy-init Anthropic client."""
+    """Lazy-init OpenAI client."""
     global _client
     if _client is None:
-        _client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        _client = openai.OpenAI(api_key=config.OPENAI_API_KEY)
     return _client
 
 
@@ -84,7 +84,7 @@ def generate_draft(
             doc = msg.get("document", "")
             score = msg.get("score", 0)
             recency = msg.get("recency", 0)
-            # Add relevance indicator for Claude
+            # Add relevance indicator
             if score > 0.7:
                 doc = "[HIGH RELEVANCE] " + doc
             elif score > 0.5:
@@ -119,18 +119,20 @@ def generate_draft(
     logger.debug("Prompt length: %d chars", len(user_prompt))
 
     try:
-        response = _get_client().messages.create(
-            model=config.CLAUDE_MODEL,
+        response = _get_client().chat.completions.create(
+            model=config.OPENAI_MODEL,
             max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_prompt}],
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt}
+            ],
         )
 
-        draft = response.content[0].text.strip()
+        draft = response.choices[0].message.content.strip()
 
-        # Check if Claude thinks no reply is needed
+        # Check if OpenAI thinks no reply is needed
         if "[NO_REPLY_NEEDED]" in draft:
-            logger.info("Claude determined no reply is needed.")
+            logger.info("OpenAI determined no reply is needed.")
             return None
 
         logger.info("Draft generated (%d chars)", len(draft))
